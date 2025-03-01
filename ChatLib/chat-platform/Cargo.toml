@@ -1,0 +1,12 @@
+[workspace]
+
+members = [
+    "chat",
+    "uniffi-bindgen",
+    "uniffi-bindgen-swift",
+]
+resolver = "2"
+
+[workspace.dependencies]
+uniffi = "0.28.2"
+

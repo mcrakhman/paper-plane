@@ -1,0 +1,26 @@
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+xcuserdata/
+project.xcworkspace/
+*.xcscmblueprint
+*.xcuserstate
+
+# Derived data and build products
+DerivedData/
+build/
+
+.build
+Packages
+
+# Swift PM artifacts
+.swiftpm/
+*.llbuild
+
+# Rust build artifacts
+target/
+
+Cargo.lock
+.cargo/
