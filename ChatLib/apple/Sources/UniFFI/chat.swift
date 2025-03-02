@@ -656,6 +656,8 @@ public protocol ChatManagerProtocol : AnyObject {
     
     func getFilePath(fileId: String) throws  -> String
     
+    func getName()  -> String
+    
     func getPeers() throws  -> [Peer]
     
     func resolveFile(fileId: String, peerId: String?) throws 
@@ -754,6 +756,13 @@ open func getFilePath(fileId: String)throws  -> String {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeChatError.lift) {
     uniffi_chat_fn_method_chatmanager_get_file_path(self.uniffiClonePointer(),
         FfiConverterString.lower(fileId),$0
+    )
+})
+}
+    
+open func getName() -> String {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_chat_fn_method_chatmanager_get_name(self.uniffiClonePointer(),$0
     )
 })
 }
@@ -1360,6 +1369,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_chat_checksum_method_chatmanager_get_file_path() != 9610) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_chat_checksum_method_chatmanager_get_name() != 22038) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_chat_checksum_method_chatmanager_get_peers() != 63021) {

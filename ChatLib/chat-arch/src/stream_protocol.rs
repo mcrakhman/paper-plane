@@ -1,7 +1,6 @@
 use anyhow::{anyhow, Result};
-use log::warn;
+use log::info;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio_yamux::StreamHandle;
 
 const REQUEST_FRAME: u8 = 0x01;
 const RESPONSE_FRAME: u8 = 0x02;

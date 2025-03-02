@@ -8,7 +8,7 @@ pub struct PeerDatabase {
     pool: SqlitePool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Peer {
     pub id: String,
     pub name: Option<String>,
@@ -31,6 +31,10 @@ impl Peer {
             public_key,
             signing_key: None,
         })
+    }
+    
+    pub fn get_name(&self) -> String {
+        self.name.clone().unwrap_or("".to_string())
     }
 }
 

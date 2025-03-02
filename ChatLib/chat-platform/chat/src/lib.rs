@@ -104,6 +104,7 @@ impl ChatManager {
                 .await
                 .map_err(|e| ChatError::create_new_error(e))
         })?;
+        let name = deps.peer.get_name();
         let mut map = HashMap::new();
         let key = deps.signing_key.clone();
         let signature = key.sign(name.as_bytes());
@@ -198,6 +199,10 @@ impl ChatManager {
             Ok(())
         })
     }
+    
+    pub fn get_name(&self) -> String {
+        self.context.peer.get_name()
+    }
 
     pub fn get_all_messages(&self) -> Result<Vec<Message>, ChatError> {
         let ctx = self.context.clone();
@@ -274,7 +279,7 @@ impl ChatManager {
                 let builder = models::MessageBuilder::new(
                     uuid::Uuid::new_v4().to_string(),
                     chrono::Utc::now().timestamp(),
-                    self.context.peer_id.to_owned(),
+                    self.context.peer.id.clone(),
                 );
                 let builder = if let Some(msg) = message {
                     builder.text(msg)

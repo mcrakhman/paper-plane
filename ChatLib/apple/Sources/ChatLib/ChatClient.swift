@@ -24,6 +24,10 @@ public class ChatClient {
         try chat.sendMessage(message: message, fileId: file)
     }
     
+    public func getName() -> String {
+        chat.getName()
+    }
+    
     public func runLoop() {
         chat.runLoop()
     }

@@ -169,7 +169,7 @@ class DnsBrowser {
                 case .removed(let result):
                     self.resolve(endpoint: result.endpoint, action: .remove)
                     print("- \(result.endpoint)")
-                case .changed(let old, let new, flags: _):
+                case .changed(_, let new, flags: _):
                     self.resolve(endpoint: new.endpoint, action: .change)
                 case .identical:
                     fallthrough

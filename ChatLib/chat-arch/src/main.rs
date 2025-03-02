@@ -33,7 +33,7 @@ async fn server(
     rt: Arc<tokio::runtime::Runtime>,
 ) -> anyhow::Result<()> {
     let deps = chat_arch::app_context::prepare_deps(name, addr, folder, rt.clone()).await?;
-    println!("My peer id is {}", &deps.peer_id);
+    println!("My peer id is {}", &deps.peer.id);
     let cloned_deps = deps.clone();
     let event_deps = deps.clone();
     let events_handle = rt.spawn(async move {
@@ -87,7 +87,7 @@ async fn read_loop(deps: AppContext) {
                 let msg = models::MessageBuilder::new(
                     uuid::Uuid::new_v4().to_string(),
                     chrono::Utc::now().timestamp(),
-                    deps.peer_id.to_owned(),
+                    deps.peer.id.clone(),
                 )
                 .text(parts[1..].join(" "))
                 .build();
@@ -140,7 +140,7 @@ async fn read_loop(deps: AppContext) {
                 let msg = models::MessageBuilder::new(
                     uuid::Uuid::new_v4().to_string(),
                     chrono::Utc::now().timestamp(),
-                    deps.peer_id.to_owned(),
+                    deps.peer.id.clone(),
                 )
                 .file_id(parts[1].to_owned())
                 .build();

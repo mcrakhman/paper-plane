@@ -103,6 +103,7 @@ class ChatManager {
         DispatchQueue.global(qos: .background).sync {
             cl = try! ChatClient(name: name, rootPath: documentsDirectory.path, port: 6364)
         }
+        let name = cl?.getName() ?? "Anonymous"
         self.client = cl!
         let rec = try client.getRecord()
         let dnsRec = try client.verifyRecord(data: rec)

@@ -1,13 +1,5 @@
 use crate::{
-    dialer::Dialer,
-    events::Events,
-    file_resolver::{FileResolver, FileResolverStorage},
-    indexer::Indexer,
-    message_database::create_pool,
-    peer_pool::PeerPool,
-    repository_manager::RepositoryManager,
-    server::Server,
-    sync_engine::SyncEngine,
+    dialer::Dialer, events::Events, file_resolver::{FileResolver, FileResolverStorage}, indexer::Indexer, message_database::create_pool, peer_database::Peer, peer_pool::PeerPool, repository_manager::RepositoryManager, server::Server, sync_engine::SyncEngine
 };
 use ed25519_dalek::SigningKey;
 use std::sync::{Arc, Weak};
@@ -21,7 +13,7 @@ pub struct AppContext {
     pub events: Arc<Events>,
     pub dialer: Arc<Dialer>,
     pub signing_key: SigningKey,
-    pub peer_id: String,
+    pub peer: Peer,
     pub peer_db: Arc<crate::peer_database::PeerDatabase>,
     pub file_db: Arc<crate::file_database::FileDatabase>,
 }
@@ -55,7 +47,7 @@ pub async fn prepare_deps(
     let events = Arc::new(Events::new());
     let indexer = Arc::new(Indexer::new(index_db, file_db.clone(), events.clone()));
     let cloned_indexer = indexer.clone();
-    let signing_key = existing_peer.signing_key.unwrap();
+    let signing_key = existing_peer.signing_key.clone().unwrap();
     let peer_id = hex::encode(signing_key.clone().verifying_key().to_bytes());
     let dialer = Arc::new(Dialer::new(signing_key.clone()));
     let dialer_clone = dialer.clone();
@@ -97,7 +89,7 @@ pub async fn prepare_deps(
         events,
         dialer,
         signing_key,
-        peer_id,
+        peer: existing_peer,
         peer_db,
         file_db,
     })
