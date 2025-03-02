@@ -130,11 +130,11 @@ impl SyncEngine {
 
     pub async fn handle_request(
         self: Arc<Self>,
-        stream: &mut StreamHandle,
+        stream: StreamHandle,
         peer_id: String,
     ) -> anyhow::Result<()> {
-        let protocol = StreamProtocol::new();
-        let req = protocol.read_request::<_, ChatMessage>(stream).await?;
+        let mut protocol = StreamProtocol::new(stream);
+        let req = protocol.read_request::<ChatMessage>().await?;
         let req = req.variant.unwrap();
         match req {
             chat_message::Variant::FileDownloadRequest(req) => {
@@ -149,7 +149,7 @@ impl SyncEngine {
                     .join(&full_path.local_path)
                     .to_string_lossy()
                     .to_string();
-                return upload_file(stream, &full_path).await;
+                return upload_file(&mut protocol, &full_path).await;
             }
             chat_message::Variant::Messages(msg) => {
                 let repo = self.repos.clone().get_repository(&msg.peer_id).await?;
@@ -168,10 +168,9 @@ impl SyncEngine {
                 };
                 drop(guard);
                 protocol
-                    .send_response::<_, ChatMessage>(stream, &resp)
+                    .send_response::<ChatMessage>(&resp)
                     .await?;
-                protocol.send_eof(stream).await?;
-                close_stream(stream).await?;
+                protocol.send_eof().await?;
                 return Ok(());
             }
             chat_message::Variant::FileWantRequest(msg) => {
@@ -191,9 +190,8 @@ impl SyncEngine {
                         crate::proto::chat::FileWantResponse { file_id: result },
                     )),
                 };
-                protocol.send_response(stream, &resp).await?;
-                protocol.send_eof(stream).await?;
-                close_stream(stream).await?;
+                protocol.send_response(&resp).await?;
+                protocol.send_eof().await?;
                 return Ok(());
             }
             chat_message::Variant::BatchMessageRequest(msg) => {
@@ -224,9 +222,8 @@ impl SyncEngine {
                     };
                 }
                 drop(guard);
-                protocol.send_response(stream, &resp).await?;
-                protocol.send_eof(stream).await?;
-                close_stream(stream).await?;
+                protocol.send_response(&resp).await?;
+                protocol.send_eof().await?;
                 return Ok(());
             }
             chat_message::Variant::CompareRequest(msg) => {
@@ -253,9 +250,8 @@ impl SyncEngine {
                         crate::proto::chat::CompareResponse { peer_ids },
                     )),
                 };
-                protocol.send_response(stream, &resp).await?;
-                protocol.send_eof(stream).await?;
-                close_stream(stream).await?;
+                protocol.send_response(&resp).await?;
+                protocol.send_eof().await?;
                 return Ok(());
             }
             _ => {
@@ -315,33 +311,24 @@ impl MessageBroadcaster for SyncEngine {
 impl PeerDelegate for SyncEngine {
     fn handle_inbound_stream(
         self: Arc<Self>,
-        mut stream: StreamHandle,
+        stream: StreamHandle,
         peer_id: String,
     ) -> anyhow::Result<()> {
         let self_clone = self.clone();
         self.clone().runtime.spawn(async move {
-            if let Err(e) = self_clone.handle_request(&mut stream, peer_id).await {
+            if let Err(e) = self_clone.handle_request(stream, peer_id).await {
                 warn!("error handling download request: {:?}", e);
             }
-            stream.flush().await;
-            stream.shutdown().await;
         });
         Ok(())
     }
 }
 
-async fn close_stream(stream: &mut StreamHandle) -> anyhow::Result<()> {
-    stream.flush().await?;
-    stream.shutdown().await?;
-    Ok(())
-}
-
-pub async fn upload_file(stream: &mut StreamHandle, filename: &str) -> anyhow::Result<()> {
+pub async fn upload_file(protocol: &mut StreamProtocol<StreamHandle>, filename: &str) -> anyhow::Result<()> {
     let ext = Path::new(filename)
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("");
-    let protocol = StreamProtocol::new();
     let mut file = tokio::fs::File::open(&filename).await?;
     let mut buffer = [0u8; 8192];
     loop {
@@ -356,8 +343,8 @@ pub async fn upload_file(stream: &mut StreamHandle, filename: &str) -> anyhow::R
                     },
                 )),
             };
-            protocol.send_response(stream, &final_chunk).await?;
-            protocol.send_eof(stream).await?;
+            protocol.send_response(&final_chunk).await?;
+            protocol.send_eof().await?;
             break;
         }
         let chunk_proto = ChatMessage {
@@ -369,7 +356,7 @@ pub async fn upload_file(stream: &mut StreamHandle, filename: &str) -> anyhow::R
                 },
             )),
         };
-        protocol.send_response(stream, &chunk_proto).await?;
+        protocol.send_response(&chunk_proto).await?;
     }
     Ok(())
 }
@@ -388,8 +375,8 @@ impl Task for BatchRequestTask {
         Box::pin(async move {
             let pool = self_clone.pool.clone();
             let peer = pool.get(&self_clone.peer_id).await?;
-            let mut stream = peer.open_stream().await?;
-            let protocol = StreamProtocol::new();
+            let stream = peer.open_stream().await?;
+            let mut protocol = StreamProtocol::new(stream);
             let req = ChatMessage {
                 variant: Some(chat_message::Variant::BatchMessageRequest(
                     crate::proto::chat::BatchMessageRequest {
@@ -398,13 +385,13 @@ impl Task for BatchRequestTask {
                     },
                 )),
             };
-            protocol.send_request(&mut stream, &req).await?;
+            protocol.send_request(&req).await?;
             debug!(
                 "sent request {:?}, peer {}, repo {}",
                 &req, &self_clone.peer_id, &self_clone.repo_id
             );
             let resp = protocol
-                .read_response::<_, ChatMessage>(&mut stream)
+                .read_response::<ChatMessage>()
                 .await?
                 .and_then(|r| r.variant);
             if resp.is_none() {
@@ -452,8 +439,8 @@ impl Task for MessageTask {
                     return Err(e);
                 }
             };
-            let mut stream = peer.open_stream().await?;
-            let protocol = StreamProtocol::new();
+            let stream = peer.open_stream().await?;
+            let mut protocol = StreamProtocol::new(stream);
             let peer_id = self_clone.messages[0].peer_id.clone();
             let req = ChatMessage {
                 variant: Some(chat_message::Variant::Messages(proto::chat::Messages {
@@ -465,9 +452,9 @@ impl Task for MessageTask {
                     peer_id,
                 })),
             };
-            protocol.send_request(&mut stream, &req).await?;
+            protocol.send_request(&req).await?;
             let resp = protocol
-                .read_response::<_, ChatMessage>(&mut stream)
+                .read_response::<ChatMessage>()
                 .await?
                 .and_then(|r| r.variant);
             if resp.is_none() {
@@ -501,8 +488,8 @@ impl FileTask {
     async fn download_file(self: Arc<Self>, path: &str, peer_id: String) -> anyhow::Result<String> {
         let pool = self.pool.clone();
         let peer = pool.get(&peer_id).await?;
-        let mut stream = peer.open_stream().await?;
-        let protocol = StreamProtocol::new();
+        let stream = peer.open_stream().await?;
+        let mut protocol = StreamProtocol::new(stream);
         let req = ChatMessage {
             variant: Some(chat_message::Variant::FileDownloadRequest(
                 crate::proto::chat::FileDownloadRequest {
@@ -511,12 +498,12 @@ impl FileTask {
                 },
             )),
         };
-        protocol.send_request(&mut stream, &req).await?;
+        protocol.send_request(&req).await?;
         let mut file = tokio::fs::File::create(&path).await?;
         let mut ext: String = "".to_string();
         loop {
             let resp = protocol
-                .read_response::<_, ChatMessage>(&mut stream)
+                .read_response::<ChatMessage>()
                 .await?;
             if resp.is_none() {
                 break;
@@ -609,8 +596,8 @@ impl Task for CompareStateTask {
                     return Err(e);
                 }
             };
-            let mut stream = peer.open_stream().await?;
-            let protocol = StreamProtocol::new();
+            let stream = peer.open_stream().await?;
+            let mut protocol = StreamProtocol::new(stream);
             let payloads = self_clone
                 .repo_states
                 .iter()
@@ -626,9 +613,9 @@ impl Task for CompareStateTask {
                     },
                 )),
             };
-            protocol.send_request(&mut stream, &req).await?;
+            protocol.send_request(&req).await?;
             let resp = protocol
-                .read_response::<_, ChatMessage>(&mut stream)
+                .read_response::<ChatMessage>()
                 .await?
                 .and_then(|r| r.variant);
             if resp.is_none() {
@@ -699,8 +686,8 @@ impl Task for FileWantTask {
                     return Err(e);
                 }
             };
-            let mut stream = peer.open_stream().await?;
-            let protocol = StreamProtocol::new();
+            let stream = peer.open_stream().await?;
+            let mut protocol = StreamProtocol::new(stream);
             let req = ChatMessage {
                 variant: Some(chat_message::Variant::FileWantRequest(
                     crate::proto::chat::FileWantRequest {
@@ -708,9 +695,9 @@ impl Task for FileWantTask {
                     },
                 )),
             };
-            protocol.send_request(&mut stream, &req).await?;
+            protocol.send_request(&req).await?;
             let resp = protocol
-                .read_response::<_, ChatMessage>(&mut stream)
+                .read_response::<ChatMessage>()
                 .await?
                 .and_then(|r| r.variant);
             if resp.is_none() {

@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use log::warn;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio_yamux::StreamHandle;
 
 const REQUEST_FRAME: u8 = 0x01;
 const RESPONSE_FRAME: u8 = 0x02;
@@ -11,19 +12,37 @@ pub trait MessageEncoding: Sized {
     fn decode_message(bytes: &[u8]) -> Result<Self>;
 }
 
-pub struct StreamProtocol;
+pub struct StreamProtocol<Stream>
+where
+    Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    stream: Option<Stream>,
+}
 
-impl StreamProtocol {
-    pub fn new() -> Self {
-        StreamProtocol
+impl<Stream> StreamProtocol<Stream>
+where
+    Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    pub fn new(stream: Stream) -> Self {
+        StreamProtocol {
+            stream: Some(stream),
+        }
     }
 
-    pub async fn send_request<W, M>(&self, stream: &mut W, message: &M) -> Result<()>
+    pub fn default() -> Self {
+        StreamProtocol { stream: None }
+    }
+
+    fn get_stream(&mut self) -> &mut Stream {
+        self.stream.as_mut().unwrap()
+    }
+
+    pub async fn send_request<M>(&mut self, message: &M) -> Result<()>
     where
-        W: AsyncWrite + Unpin,
         M: MessageEncoding,
     {
         let payload = message.encode_message();
+        let stream = self.get_stream();
         stream.write_all(&[REQUEST_FRAME]).await?;
 
         let length = payload.len() as u32;
@@ -33,12 +52,12 @@ impl StreamProtocol {
         Ok(())
     }
 
-    pub async fn read_request<R, M>(&self, stream: &mut R) -> Result<M>
+    pub async fn read_request<M>(&mut self) -> Result<M>
     where
-        R: AsyncRead + Unpin,
         M: MessageEncoding,
     {
         let mut type_buf = [0u8; 1];
+        let stream = self.get_stream();
         stream.read_exact(&mut type_buf).await?;
         if type_buf[0] != REQUEST_FRAME {
             return Err(anyhow!(
@@ -58,13 +77,12 @@ impl StreamProtocol {
         Ok(message)
     }
 
-    pub async fn send_response<W, M>(&self, stream: &mut W, message: &M) -> Result<()>
+    pub async fn send_response<M>(&mut self, message: &M) -> Result<()>
     where
-        W: AsyncWrite + Unpin,
         M: MessageEncoding,
     {
         let payload = message.encode_message();
-
+        let stream = self.get_stream();
         stream.write_all(&[RESPONSE_FRAME]).await?;
 
         let length = payload.len() as u32;
@@ -75,10 +93,8 @@ impl StreamProtocol {
         Ok(())
     }
 
-    pub async fn send_eof<W>(&self, stream: &mut W) -> Result<()>
-    where
-        W: AsyncWrite + Unpin,
-    {
+    pub async fn send_eof(&mut self) -> Result<()> {
+        let stream = self.get_stream();
         stream.write_all(&[RESPONSE_FRAME]).await?;
         let eof = 0xFFFF_FFFFu32.to_be_bytes();
         stream.write_all(&eof).await?;
@@ -86,12 +102,12 @@ impl StreamProtocol {
         Ok(())
     }
 
-    pub async fn read_response<R, M>(&self, stream: &mut R) -> Result<Option<M>>
+    pub async fn read_response<M>(&mut self) -> Result<Option<M>>
     where
-        R: AsyncRead + Unpin,
         M: MessageEncoding,
     {
         let mut type_buf = [0u8; 1];
+        let stream = self.get_stream();
         if let Err(e) = stream.read_exact(&mut type_buf).await {
             return Err(anyhow!("Failed to read response type: {}", e));
         }
@@ -116,22 +132,20 @@ impl StreamProtocol {
         let msg = M::decode_message(&chunk)?;
         Ok(Some(msg))
     }
+}
 
-    pub async fn read_response_collect<R, M>(&self, stream: &mut R) -> Result<Vec<M>>
-    where
-        R: AsyncRead + Unpin,
-        M: MessageEncoding,
-    {
-        let mut messages = Vec::new();
-        loop {
-            match self.read_response::<_, M>(stream).await? {
-                Some(msg) => {
-                    warn!("read message while reading response");
-                    messages.push(msg)
-                }
-                None => break, // EOF
-            }
+impl<Stream> Drop for StreamProtocol<Stream>
+where
+    Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    fn drop(&mut self) {
+        if let Some(mut stream) = self.stream.take() {
+            let mut this = StreamProtocol::default();
+            std::mem::swap(&mut this, self);
+            tokio::spawn(async move {
+                let _ = stream.flush().await;
+                let _ = stream.shutdown().await;
+            });
         }
-        Ok(messages)
     }
 }
