@@ -1,8 +1,10 @@
 use crate::models::IndexedMessage;
 use log::warn;
+use crate::peer_database::Peer;
 
 pub enum ChatEvent {
     Message(IndexedMessage),
+    Peer(Peer),
 }
 
 pub struct Events {
@@ -26,12 +28,20 @@ impl Events {
                 ChatEvent::Message(message) => {
                     warn!("message received: {:?}", message);
                 }
+                ChatEvent::Peer(peer) => {
+                    warn!("peer received: {:?}", peer);
+                }
             }
         }
     }
 
     pub async fn send_message(&self, message: IndexedMessage) -> anyhow::Result<()> {
         self.tx.send_async(ChatEvent::Message(message)).await?;
+        Ok(())
+    }
+    
+    pub async fn send_peer(&self, peer: Peer) -> anyhow::Result<()> {
+        self.tx.send_async(ChatEvent::Peer(peer)).await?;
         Ok(())
     }
 }

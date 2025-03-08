@@ -9,6 +9,7 @@ use tokio::{
 };
 use tokio_yamux::StreamHandle;
 
+use crate::peer_database::{Peer, PeerDatabase};
 use crate::{
     events::Events,
     file_resolver::{FileResolverStorage, ResolveResult, ResolveWant},
@@ -49,6 +50,7 @@ pub struct SyncEngine {
     id: String,
     root_path: String,
     request_queue: Arc<RequestQueue>,
+    peer_db: Arc<PeerDatabase>,
     task_scheduler: PeriodicTaskScheduler,
     pub peer_pool: Arc<EncryptedPool>,
     repos: Arc<RepositoryManager>,
@@ -61,6 +63,7 @@ impl SyncEngine {
         id: String,
         root_path: String,
         peer_pool: Arc<EncryptedPool>,
+        peer_db: Arc<PeerDatabase>,
         manager: Arc<RepositoryManager>,
         file_storage: Arc<FileResolverStorage>,
         events: Arc<Events>,
@@ -72,12 +75,14 @@ impl SyncEngine {
         let pool = peer_pool.clone();
         let events_clone = events.clone();
         let file_storage_clone = file_storage.clone();
+        let peer_db_clone = peer_db.clone();
         let async_task: Arc<AsyncFn> = Arc::new(move || {
             let repo_clone = cloned_repos.clone();
             let rq = cloned_rq.clone();
             let pool_clone = pool.clone();
             let file_storage = file_storage_clone.clone();
             let events = events_clone.clone();
+            let peer_db = peer_db_clone.clone();
             Box::pin(async move {
                 debug!("getting repo states");
                 let file_ids = file_storage.get_need_resolve().await;
@@ -89,6 +94,7 @@ impl SyncEngine {
                         let task = CompareStateTask {
                             peer_id: peer.clone(),
                             repo_states: repo_states.clone(),
+                            peer_db: peer_db.clone(),
                             pool: pool_clone.clone(),
                             rq: rq.clone(),
                             manager: repo_clone.clone(),
@@ -110,6 +116,7 @@ impl SyncEngine {
         SyncEngine {
             id,
             root_path,
+            peer_db,
             request_queue: rq,
             peer_pool,
             repos: manager,
@@ -152,6 +159,11 @@ impl SyncEngine {
                 return upload_file(&mut protocol, &full_path).await;
             }
             chat_message::Variant::Messages(msg) => {
+                if let Some(peer) = msg.peer {
+                    let peer = Peer::new(peer.id, peer.name, peer.pub_key)?;
+                    info!("saving peer {:?}", &peer);
+                    self.peer_db.save_peer(&peer).await?;
+                }
                 let repo = self.repos.clone().get_repository(&msg.peer_id).await?;
                 let guard = repo.lock().await;
                 let db_messages: Vec<DbMessage> =
@@ -167,9 +179,7 @@ impl SyncEngine {
                     )),
                 };
                 drop(guard);
-                protocol
-                    .send_response::<ChatMessage>(&resp)
-                    .await?;
+                protocol.send_response::<ChatMessage>(&resp).await?;
                 protocol.send_eof().await?;
                 return Ok(());
             }
@@ -207,16 +217,24 @@ impl SyncEngine {
                 if their_counter >= my_counter {
                     resp = ChatMessage {
                         variant: Some(chat_message::Variant::BatchMessageResponse(
-                            crate::proto::chat::BatchMessageResponse { messages: vec![] },
+                            crate::proto::chat::BatchMessageResponse {
+                                messages: vec![],
+                                peer: None,
+                            },
                         )),
                     };
                 } else {
+                    let mut peer = None;
+                    if their_counter == 0 {
+                        peer = self.peer_db.get_peer_by_id(&msg.peer_id).await?;
+                    }
                     let messages = guard.get_messages(their_counter).await?;
                     let resp_messages = messages.into_iter().map(|m| m.into()).collect();
                     resp = ChatMessage {
                         variant: Some(chat_message::Variant::BatchMessageResponse(
                             crate::proto::chat::BatchMessageResponse {
                                 messages: resp_messages,
+                                peer: peer.map(|p| p.into()),
                             },
                         )),
                     };
@@ -299,6 +317,7 @@ impl MessageBroadcaster for SyncEngine {
         for peer in current_peers {
             let task = MessageTask {
                 peer_id: peer.clone(),
+                peer_db: self.peer_db.clone(),
                 messages: sync_message.stored_messages.clone(),
                 pool: self.peer_pool.clone(),
             };
@@ -324,7 +343,10 @@ impl PeerDelegate for SyncEngine {
     }
 }
 
-pub async fn upload_file(protocol: &mut StreamProtocol<StreamHandle>, filename: &str) -> anyhow::Result<()> {
+pub async fn upload_file(
+    protocol: &mut StreamProtocol<StreamHandle>,
+    filename: &str,
+) -> anyhow::Result<()> {
     let ext = Path::new(filename)
         .extension()
         .and_then(|e| e.to_str())
@@ -366,6 +388,7 @@ pub struct BatchRequestTask {
     pub peer_id: String,
     pub repo_id: String,
     pub pool: Arc<EncryptedPool>,
+    pub peer_db: Arc<PeerDatabase>,
     pub repo_manager: Arc<RepositoryManager>,
 }
 
@@ -405,6 +428,11 @@ impl Task for BatchRequestTask {
                         "received response, peer {}, repo {}",
                         &self_clone.peer_id, &self_clone.repo_id
                     );
+                    if let Some(peer) = resp.peer {
+                        let peer = Peer::new(peer.id, peer.name, peer.pub_key)?;
+                        info!("saving peer {:?}", &peer);
+                        self_clone.peer_db.save_peer(&peer).await?;
+                    }
                     let repo = self_clone
                         .repo_manager
                         .clone()
@@ -422,6 +450,7 @@ impl Task for BatchRequestTask {
 
 pub struct MessageTask {
     pub peer_id: String,
+    pub peer_db: Arc<PeerDatabase>,
     pub messages: Vec<DbMessage>,
     pub pool: Arc<EncryptedPool>,
 }
@@ -442,6 +471,10 @@ impl Task for MessageTask {
             let stream = peer.open_stream().await?;
             let mut protocol = StreamProtocol::new(stream);
             let peer_id = self_clone.messages[0].peer_id.clone();
+            let mut peer: Option<Peer> = None;
+            if self_clone.messages[0].counter == 0 {
+                peer = self_clone.peer_db.get_peer_by_id(&peer_id).await?;
+            }
             let req = ChatMessage {
                 variant: Some(chat_message::Variant::Messages(proto::chat::Messages {
                     messages: self_clone
@@ -450,6 +483,7 @@ impl Task for MessageTask {
                         .map(|m| m.clone().into())
                         .collect(),
                     peer_id,
+                    peer: peer.map(|p| p.into()),
                 })),
             };
             protocol.send_request(&req).await?;
@@ -502,9 +536,7 @@ impl FileTask {
         let mut file = tokio::fs::File::create(&path).await?;
         let mut ext: String = "".to_string();
         loop {
-            let resp = protocol
-                .read_response::<ChatMessage>()
-                .await?;
+            let resp = protocol.read_response::<ChatMessage>().await?;
             if resp.is_none() {
                 break;
             }
@@ -578,6 +610,7 @@ impl Task for FileTask {
 pub struct CompareStateTask {
     peer_id: String,
     repo_states: Vec<RepoState>,
+    peer_db: Arc<PeerDatabase>,
     pool: Arc<EncryptedPool>,
     rq: Arc<RequestQueue>,
     manager: Arc<RepositoryManager>,
@@ -635,6 +668,7 @@ impl Task for CompareStateTask {
                         let task = BatchRequestTask {
                             repo_id: state.peer_id.clone(),
                             counter: state.counter,
+                            peer_db: self_clone.peer_db.clone(),
                             peer_id: self_clone.peer_id.clone(),
                             pool: pool.clone(),
                             repo_manager: self_clone.manager.clone(),
@@ -651,6 +685,7 @@ impl Task for CompareStateTask {
                         let task = BatchRequestTask {
                             counter: 0,
                             repo_id: peer_id.clone(),
+                            peer_db: self_clone.peer_db.clone(),
                             peer_id: self_clone.peer_id.clone(),
                             pool: pool.clone(),
                             repo_manager: self_clone.manager.clone(),

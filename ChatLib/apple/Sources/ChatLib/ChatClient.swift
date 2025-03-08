@@ -35,6 +35,10 @@ public class ChatClient {
     public func runServer() {
         chat.runServer()
     }
+
+    public func stopServer() {
+        chat.stopServer()
+    }
     
     public func verifyRecord(data: Data) throws -> DnsRecord {
         try chat.verifyRecord(record: data)

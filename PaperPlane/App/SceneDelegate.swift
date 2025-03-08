@@ -1,4 +1,5 @@
 import UIKit
+import os
 
 class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
@@ -27,7 +28,19 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         
         window?.rootViewController = navController
         window?.makeKeyAndVisible()
+        chatManager.prepare()
         chatManager.start()
+        self.chatManager = chatManager
+    }
+
+    func sceneWillResignActive(_ scene: UIScene) {
+        os_log("will resign", type: .info)
+        chatManager?.stop()
+    }
+
+    func sceneWillEnterForeground(_ scene: UIScene) {
+        os_log("enter foreground", type: .info)
+        chatManager?.start()
     }
 }
 

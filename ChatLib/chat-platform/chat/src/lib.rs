@@ -8,7 +8,8 @@ use std::env;
 use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
 use uniffi::deps::anyhow;
-use uniffi::deps::log::info;
+use uniffi::deps::log::{info, LevelFilter};
+use oslog::OsLogger;
 
 uniffi::setup_scaffolding!();
 
@@ -40,6 +41,7 @@ impl From<chat_arch::peer_database::Peer> for Peer {
 #[derive(uniffi::Enum)]
 pub enum Event {
     Message(Message),
+    Peer(Peer),
 }
 
 #[derive(Debug, PartialEq, thiserror::Error, uniffi::Error)]
@@ -95,7 +97,11 @@ impl ChatManager {
         unsafe {
             env::set_var("RUST_LOG", "DEBUG");
         }
-        env_logger::init();
+        // env_logger::init();
+        OsLogger::new("com.rust")
+            .level_filter(LevelFilter::Debug)
+            .init()
+            .unwrap();
         let runtime = tokio::runtime::Runtime::new().map_err(|e| ChatError::create_new_error(e))?;
         let runtime = Arc::new(runtime);
         let addr = format!("0.0.0.0:{}", port);
@@ -145,6 +151,10 @@ impl ChatManager {
             }
         });
     }
+    
+    pub fn stop_server(&self) {
+        self.context.server.stop();
+    }
 
     pub fn run_loop(&self) {
         self.context.sync_engine.run();
@@ -169,6 +179,17 @@ impl ChatManager {
                     if file_id.is_some() && file_path.is_none() {
                         self.resolve_file(file_id.unwrap(), Some(peer_id));
                     }
+                    if let Some(delegate) = &*guard {
+                        delegate.on_event(event);
+                    }
+                }
+                ChatEvent::Peer(peer) => {
+                    let peer = Peer {
+                        id: peer.id,
+                        name: peer.name.unwrap_or("Unknown".to_owned()),
+                    };
+                    let event = Event::Peer(peer);
+                    let guard = self.delegate.lock().unwrap();
                     if let Some(delegate) = &*guard {
                         delegate.on_event(event);
                     }

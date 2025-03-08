@@ -22,6 +22,7 @@ socket2 = "0.5.8"
 hex = "0.4.3"
 uuid = { version = "1.12.0", features = ["v4"] }
 chat-arch = { path = "../../chat-arch" }
+oslog = "0.2.0"
 chrono = "0.4.39"
 flume = { version = "0.11.1", features = ["async"] }
 env_logger = "0.11.6"

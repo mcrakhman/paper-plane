@@ -24,8 +24,9 @@ pub async fn prepare_deps(
     root_path: &str,
     runtime: Arc<tokio::runtime::Runtime>,
 ) -> anyhow::Result<AppContext> {
+    let events = Arc::new(Events::new());
     let db_pool = create_pool(root_path).await?;
-    let peer_db = Arc::new(crate::peer_database::PeerDatabase::new(db_pool.clone()));
+    let peer_db = Arc::new(crate::peer_database::PeerDatabase::new(db_pool.clone(), events.clone()));
     peer_db.init().await?;
     let mut existing_peer = peer_db.get_local_peer().await?;
     if existing_peer.is_none() {
@@ -44,7 +45,6 @@ pub async fn prepare_deps(
     let file_storage = Arc::new(FileResolverStorage::new(file_db.clone()));
     let index_db = crate::index_database::IndexedMessageDatabase::new(db_pool.clone());
     index_db.init().await?;
-    let events = Arc::new(Events::new());
     let indexer = Arc::new(Indexer::new(index_db, file_db.clone(), events.clone()));
     let cloned_indexer = indexer.clone();
     let signing_key = existing_peer.signing_key.clone().unwrap();
@@ -63,6 +63,7 @@ pub async fn prepare_deps(
             peer_id.clone(),
             root_path.to_owned(),
             peer_pool.clone(),
+            peer_db.clone(),
             manager,
             file_storage.clone(),
             events.clone(),

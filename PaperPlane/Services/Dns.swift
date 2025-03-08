@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import os
 
 struct ServiceDescription {
     let name: String
@@ -152,29 +153,29 @@ class DnsBrowser {
     }
 
     func start() {
-        print("browser will start")
+        os_log("browser will start", type: .info)
         let descriptor = NWBrowser.Descriptor.bonjourWithTXTRecord(
             type: self.type, domain: "local.")
         let browser = NWBrowser(for: descriptor, using: .tcp)
         browser.stateUpdateHandler = { newState in
-            print("browser did change state, new: \(newState)")
+            os_log("browser did change state, new: %{public}@", type: .info, String(describing: newState))
         }
         browser.browseResultsChangedHandler = { updated, changes in
-            print("browser results did change:")
+            os_log("browser results did change:", type: .info)
             for change in changes {
                 switch change {
                 case .added(let result):
                     self.resolve(endpoint: result.endpoint, action: .add)
-                    print("+ \(result.metadata) \(result.interfaces)")
+                    os_log("+ %{public}@ %{public}@", type: .info, String(describing: result.metadata), String(describing: result.interfaces))
                 case .removed(let result):
                     self.resolve(endpoint: result.endpoint, action: .remove)
-                    print("- \(result.endpoint)")
+                    os_log("- %{public}@", type: .info, String(describing: result.endpoint))
                 case .changed(_, let new, flags: _):
                     self.resolve(endpoint: new.endpoint, action: .change)
                 case .identical:
                     fallthrough
                 @unknown default:
-                    print("?")
+                    os_log("?", type: .info)
                 }
             }
         }
@@ -192,16 +193,16 @@ class DnsBrowser {
                 return
             }
             let service = NetService(domain: domain, type: type, name: name)
-            print("will resolve, service: \(service)")
+            os_log("will resolve, service: %{public}@", type: .info, String(describing: service))
             BonjourResolver.resolve(service: service) { result in
                 switch result {
                 case .success(let description):
                     self.resolver?.didResolvePeer(
                         result: action == .add
                             ? .added(description) : .changed(description))
-                    print("did resolve, host: \(description.name)")
+                    os_log("did resolve, host: %{public}@", type: .info, description.name)
                 case .failure(let error):
-                    print("did not resolve, error: \(error)")
+                    os_log("did not resolve, error: %{public}@", type: .error, String(describing: error))
                 }
             }
         }
@@ -237,7 +238,7 @@ class DnsSender {
     func start() {
         guard let listener = try? NWListener(using: .tcp) else { return }
         listener.stateUpdateHandler = { newState in
-            print("listener did change state, new: \(newState)")
+            os_log("listener did change state, new: %{public}@", type: .info, String(describing: newState))
         }
         listener.newConnectionHandler = { connection in
             connection.cancel()
@@ -245,7 +246,7 @@ class DnsSender {
 
         listener.service = .init(name: name, type: type, txtRecord: self.record)
         listener.serviceRegistrationUpdateHandler = { change in
-            print("ch", change)
+            os_log("service registration update: %{public}@", type: .info, String(describing: change))
         }
         listener.start(queue: .main)
         self.listener = listener

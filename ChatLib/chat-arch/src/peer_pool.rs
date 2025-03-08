@@ -102,6 +102,7 @@ impl PeerPool {
                 if clone.is_alive().await {
                     return Ok(clone);
                 } else {
+                    info!("removing dead peer from outgoing {}", &peer_id);
                     guard.remove(&peer_id);
                 }
             }
@@ -113,12 +114,13 @@ impl PeerPool {
                 if clone.is_alive().await {
                     return Ok(clone);
                 } else {
+                    info!("removing dead peer from incoming {}", &peer_id);
                     guard.remove(&peer_id);
                 }
             }
         }
         info!("dialing {}", &peer_id);
-        let timeout_duration = Duration::from_secs(2);
+        let timeout_duration = Duration::from_secs(10);
         
         let session = timeout(timeout_duration, self.dialer.dial(&peer_id)).await??;
         let delegate = self

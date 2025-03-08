@@ -674,6 +674,8 @@ public protocol ChatManagerProtocol : AnyObject {
     
     func setPeer(name: String, addr: String, pubKey: String) throws 
     
+    func stopServer() 
+    
     func verifyRecord(record: Data) throws  -> DnsRecord
     
 }
@@ -823,6 +825,12 @@ open func setPeer(name: String, addr: String, pubKey: String)throws  {try rustCa
         FfiConverterString.lower(name),
         FfiConverterString.lower(addr),
         FfiConverterString.lower(pubKey),$0
+    )
+}
+}
+    
+open func stopServer() {try! rustCall() {
+    uniffi_chat_fn_method_chatmanager_stop_server(self.uniffiClonePointer(),$0
     )
 }
 }
@@ -1217,6 +1225,8 @@ public enum Event {
     
     case message(Message
     )
+    case peer(Peer
+    )
 }
 
 
@@ -1233,6 +1243,9 @@ public struct FfiConverterTypeEvent: FfiConverterRustBuffer {
         case 1: return .message(try FfiConverterTypeMessage.read(from: &buf)
         )
         
+        case 2: return .peer(try FfiConverterTypePeer.read(from: &buf)
+        )
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
@@ -1244,6 +1257,11 @@ public struct FfiConverterTypeEvent: FfiConverterRustBuffer {
         case let .message(v1):
             writeInt(&buf, Int32(1))
             FfiConverterTypeMessage.write(v1, into: &buf)
+            
+        
+        case let .peer(v1):
+            writeInt(&buf, Int32(2))
+            FfiConverterTypePeer.write(v1, into: &buf)
             
         }
     }
@@ -1396,6 +1414,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_chat_checksum_method_chatmanager_set_peer() != 45106) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_chat_checksum_method_chatmanager_stop_server() != 45008) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_chat_checksum_method_chatmanager_verify_record() != 44798) {

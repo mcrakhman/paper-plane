@@ -1,11 +1,14 @@
+use std::sync::Arc;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use hex;
 use sqlx::{Row, SqlitePool};
+use crate::events::Events;
 
 pub struct PeerDatabase {
     pool: SqlitePool,
+    events: Arc<Events>,
 }
 
 #[derive(Debug, Clone)]
@@ -17,12 +20,23 @@ pub struct Peer {
     pub signing_key: Option<SigningKey>,
 }
 
+impl Into<crate::proto::chat::Peer> for Peer {
+    fn into(self) -> crate::proto::chat::Peer {
+        crate::proto::chat::Peer {
+            id: self.id.clone(),
+            name: self.name.unwrap_or("".to_string()),
+            pub_key: self.id,
+        }
+    }
+}
+
 impl Peer {
     pub fn new(id: String, name: String, pub_key: String) -> Result<Peer> {
         let public_key = VerifyingKey::from_bytes(
             hex::decode(pub_key)
                 .map_err(|_| anyhow::anyhow!("Invalid public key hex"))?
-                .as_slice().try_into()?
+                .as_slice()
+                .try_into()?,
         )?;
         Ok(Peer {
             id,
@@ -32,15 +46,15 @@ impl Peer {
             signing_key: None,
         })
     }
-    
+
     pub fn get_name(&self) -> String {
         self.name.clone().unwrap_or("".to_string())
     }
 }
 
 impl PeerDatabase {
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+    pub fn new(pool: SqlitePool, events: Arc<Events>) -> Self {
+        Self { pool, events }
     }
 
     pub async fn init(&self) -> Result<()> {
@@ -77,7 +91,7 @@ impl PeerDatabase {
         .bind(signing_key_bytes.map(|bytes| bytes.to_vec()))
         .execute(&self.pool)
         .await?;
-
+        self.events.send_peer(peer.clone()).await?;
         Ok(())
     }
 

@@ -49,6 +49,7 @@ impl peer_pool::Dialer for Dialer {
             "failed to find addr for peer_id {}",
             peer_id
         ))?;
+        info!("dialing {}", addr);
         let sock_addr = addr.parse::<SocketAddr>()?;
         let mut socket = tokio::net::TcpStream::connect(sock_addr).await?;
         socket.peer_addr()?;

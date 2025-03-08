@@ -3,28 +3,29 @@ syntax = "proto3";
 package chat;
 
 message FileDownloadRequest {
-  string file_id = 1;
-  string peer_id = 2;
+    string file_id = 1;
+    string peer_id = 2;
 }
 
 message FileDownloadResponse {
-  bytes chunk = 1;
-  bool last_chunk = 2;
-  string ext = 3;
+    bytes chunk = 1;
+    bool last_chunk = 2;
+    string ext = 3;
 }
 
 message Message {
-  bytes payload = 1;
-  int64 global_counter = 2;
-  int64 timestamp = 3;
-  int32 counter = 4;
-  string peer_id = 5;
-  string id = 6;
+    bytes payload = 1;
+    int64 global_counter = 2;
+    int64 timestamp = 3;
+    int32 counter = 4;
+    string peer_id = 5;
+    string id = 6;
 }
 
 message Messages {
-  repeated Message messages = 1;
-  string peer_id = 2;
+    repeated Message messages = 1;
+    string peer_id = 2;
+    optional Peer peer = 3;
 }
 
 message MessagePayload {
@@ -35,50 +36,57 @@ message MessagePayload {
 }
 
 message MessageAccept {
-  int32 counter = 1;
+    int32 counter = 1;
 }
 
 message FileWantRequest {
-  repeated string file_id = 1;
+    repeated string file_id = 1;
 }
 
 message FileWantResponse {
-  repeated string file_id = 1;
+    repeated string file_id = 1;
 }
 
 message CompareRequest {
-  repeated ComparePayload compare_payload = 1;
+    repeated ComparePayload compare_payload = 1;
 }
 
 message CompareResponse {
-  repeated string peer_ids = 1;
+    repeated string peer_ids = 1;
 }
 
 message ComparePayload {
-  int32 counter = 1;
-  string peer_id = 2;
+    int32 counter = 1;
+    string peer_id = 2;
 }
 
 message BatchMessageRequest {
-  int32 my_counter = 1;
-  string peer_id = 2;
+    int32 my_counter = 1;
+    string peer_id = 2;
 }
 
 message BatchMessageResponse {
-  repeated Message messages = 3;
+    repeated Message messages = 1;
+    optional Peer peer = 2;
+}
+
+message Peer {
+    string id = 1;
+    string name = 2;
+    string pub_key = 3;
 }
 
 message ChatMessage {
-  oneof variant {
-    FileDownloadRequest file_download_request = 1;
-    FileDownloadResponse file_download_response = 2;
-    Messages messages = 3;
-    MessageAccept message_accept = 4;
-    BatchMessageRequest batch_message_request = 5;
-    BatchMessageResponse batch_message_response = 6;
-    CompareRequest compare_request = 7;
-    CompareResponse compare_response = 8;
-    FileWantRequest file_want_request = 9;
-    FileWantResponse file_want_response = 10;
-  }
+    oneof variant {
+        FileDownloadRequest file_download_request = 1;
+        FileDownloadResponse file_download_response = 2;
+        Messages messages = 3;
+        MessageAccept message_accept = 4;
+        BatchMessageRequest batch_message_request = 5;
+        BatchMessageResponse batch_message_response = 6;
+        CompareRequest compare_request = 7;
+        CompareResponse compare_response = 8;
+        FileWantRequest file_want_request = 9;
+        FileWantResponse file_want_response = 10;
+    }
 }

@@ -2,6 +2,7 @@ import ChatLib
 import MessageKit
 import Foundation
 import UniFFI
+import os
 
 extension UserInfo: Identifiable {
     var id: String { pubKey }
@@ -60,7 +61,6 @@ extension ChatManager: PeerResolver {
                 print("Updating \(String(describing: peers[peer.name]))")
                 let addr = "\(ip):\(verify.port)"
                 try? client.setPeer(name: peer.name, addr: addr, peerId: verify.pubKey, pubKey: verify.pubKey)
-                self.chatDelegate?.updatePeers((try? client.getPeers()) ?? [])
             }
         case .removed(let name):
             peers[name] = nil
@@ -74,6 +74,8 @@ extension ChatManager: ChatDelegate {
             switch event {
             case .message(let msg):
                 self.chatDelegate?.newMessage(msg)
+            case .peer(let peer):
+                self.chatDelegate?.updatePeers((try? self.client.getPeers()) ?? [])
             }
         }
     }
@@ -93,7 +95,8 @@ class ChatManager {
     private let sender: DnsSender
     let myUserInfo: UserInfo
     let myPeer: Peer
-    
+    var isRunning = false
+
     init(name: String) throws {
         let documentsDirectory = FileManager.default.urls(
             for: .documentDirectory,
@@ -142,16 +145,33 @@ class ChatManager {
     public func getAllPeers() -> [UniFFI.Peer] {
         return (try? client.getPeers()) ?? []
     }
-    
-    func start() {
-        self.sender.start()
-        self.browser.start()
+
+    func prepare() {
         self.client.setDelegate(delegate: self)
         Thread(block: {
             self.client.runLoop()
         }).start()
+    }
+
+    func start() {
+        guard !isRunning else {
+            return
+        }
+        isRunning = true
+        self.sender.startStop()
+        self.browser.startStop()
         Thread(block: {
             self.client.runServer()
         }).start()
+    }
+
+    func stop() {
+        guard isRunning else {
+            return
+        }
+        isRunning = false
+        self.sender.startStop()
+        self.browser.startStop()
+        self.client.stopServer()
     }
 }

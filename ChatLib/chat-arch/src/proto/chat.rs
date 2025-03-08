@@ -36,6 +36,8 @@ pub struct Messages {
     pub messages: ::prost::alloc::vec::Vec<Message>,
     #[prost(string, tag = "2")]
     pub peer_id: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "3")]
+    pub peer: ::core::option::Option<Peer>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MessagePayload {
@@ -89,8 +91,19 @@ pub struct BatchMessageRequest {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BatchMessageResponse {
-    #[prost(message, repeated, tag = "3")]
+    #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<Message>,
+    #[prost(message, optional, tag = "2")]
+    pub peer: ::core::option::Option<Peer>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Peer {
+    #[prost(string, tag = "1")]
+    pub id: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub pub_key: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ChatMessage {
