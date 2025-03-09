@@ -7,6 +7,9 @@ xcuserdata/
 project.xcworkspace/
 *.xcscmblueprint
 *.xcuserstate
+.index-build/
+chat_data/
+.idea
 
 # Derived data and build products
 DerivedData/
