@@ -75,7 +75,6 @@ impl RepositoryManager {
         peer_id: &str,
     ) -> Result<Arc<Mutex<Repository>>> {
         let mut repositories = self.repositories.lock().await;
-        println!("creating repository: {}", peer_id);
         if let Some(repo) = repositories.get(peer_id) {
             Ok(repo.clone())
         } else {

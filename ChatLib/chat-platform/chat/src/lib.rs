@@ -82,6 +82,7 @@ pub struct ChatManager {
     signing_key: SigningKey,
     root_path: String,
     txt_record: Vec<u8>,
+    txt_record_map: HashMap<String, String>,
     delegate: Arc<Mutex<Option<Arc<dyn ChatDelegate>>>>,
 }
 
@@ -95,13 +96,13 @@ impl ChatManager {
     #[uniffi::constructor]
     pub fn new(name: String, root_path: String, port: u16) -> Result<Self, ChatError> {
         unsafe {
-            env::set_var("RUST_LOG", "DEBUG");
+            // env::set_var("RUST_LOG", "DEBUG");
         }
-        // env_logger::init();
-        OsLogger::new("com.rust")
-            .level_filter(LevelFilter::Debug)
-            .init()
-            .unwrap();
+        env_logger::init();
+        // OsLogger::new("com.rust")
+        //     .level_filter(LevelFilter::Debug)
+        //     .init()
+        //     .unwrap();
         let runtime = tokio::runtime::Runtime::new().map_err(|e| ChatError::create_new_error(e))?;
         let runtime = Arc::new(runtime);
         let addr = format!("0.0.0.0:{}", port);
@@ -121,7 +122,7 @@ impl ChatManager {
             "pub_key".to_string(),
             hex::encode(key.verifying_key().to_bytes()),
         );
-        let txt_record = encode_txt_record(map).unwrap();
+        let txt_record = encode_txt_record(&map).unwrap();
         let mgr = ChatManager {
             root_path,
             context: deps,
@@ -129,6 +130,7 @@ impl ChatManager {
             signing_key: key,
             delegate: Arc::new(Mutex::new(None)),
             txt_record,
+            txt_record_map: map,
         };
         Ok(mgr)
     }
@@ -224,6 +226,10 @@ impl ChatManager {
     pub fn get_name(&self) -> String {
         self.context.peer.get_name()
     }
+    
+    pub fn get_pub_key(&self) -> String {
+        self.context.peer.id.clone()
+    }
 
     pub fn get_all_messages(&self) -> Result<Vec<Message>, ChatError> {
         let ctx = self.context.clone();
@@ -318,6 +324,10 @@ impl ChatManager {
 
     pub fn verify_record(&self, record: &[u8]) -> Result<DnsRecord, ChatError> {
         let record = decode_txt_record(record).unwrap();
+        self.verify_hashmap_record(&record)
+    }
+    
+    pub fn verify_hashmap_record(&self, record: &HashMap<String, String>) -> Result<DnsRecord, ChatError> {
         let signature = record
             .get("signature")
             .ok_or(ChatError::FailedToDecodeTxtRecord)?;
@@ -356,9 +366,13 @@ impl ChatManager {
     pub fn get_dns_record(&self) -> Vec<u8> {
         self.txt_record.clone()
     }
+    
+    pub fn get_dns_record_map(&self) -> HashMap<String, String> {
+        self.txt_record_map.clone()
+    }
 }
 
-fn encode_txt_record(txt_record: HashMap<String, String>) -> Option<Vec<u8>> {
+fn encode_txt_record(txt_record: &HashMap<String, String>) -> Option<Vec<u8>> {
     let mut result = Vec::new();
     for (key, value) in txt_record {
         let entry = format!("{}={}", key, value);

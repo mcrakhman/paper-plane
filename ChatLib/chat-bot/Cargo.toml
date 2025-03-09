@@ -1,0 +1,10 @@
+[package]
+name = "chat-bot"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+mdns-sd = "0.13.3"
+chat = { path = "../chat-platform/chat" }
+uuid = { version = "1.12.1", features = ["v4"] }
+log = "0.4.25"
