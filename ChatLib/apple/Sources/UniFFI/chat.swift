@@ -654,11 +654,15 @@ public protocol ChatManagerProtocol : AnyObject {
     
     func getDnsRecord()  -> Data
     
+    func getDnsRecordMap()  -> [String: String]
+    
     func getFilePath(fileId: String) throws  -> String
     
     func getName()  -> String
     
     func getPeers() throws  -> [Peer]
+    
+    func getPubKey()  -> String
     
     func resolveFile(fileId: String, peerId: String?) throws 
     
@@ -675,6 +679,8 @@ public protocol ChatManagerProtocol : AnyObject {
     func setPeer(name: String, addr: String, pubKey: String) throws 
     
     func stopServer() 
+    
+    func verifyHashmapRecord(record: [String: String]) throws  -> DnsRecord
     
     func verifyRecord(record: Data) throws  -> DnsRecord
     
@@ -754,6 +760,13 @@ open func getDnsRecord() -> Data {
 })
 }
     
+open func getDnsRecordMap() -> [String: String] {
+    return try!  FfiConverterDictionaryStringString.lift(try! rustCall() {
+    uniffi_chat_fn_method_chatmanager_get_dns_record_map(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
 open func getFilePath(fileId: String)throws  -> String {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeChatError.lift) {
     uniffi_chat_fn_method_chatmanager_get_file_path(self.uniffiClonePointer(),
@@ -772,6 +785,13 @@ open func getName() -> String {
 open func getPeers()throws  -> [Peer] {
     return try  FfiConverterSequenceTypePeer.lift(try rustCallWithError(FfiConverterTypeChatError.lift) {
     uniffi_chat_fn_method_chatmanager_get_peers(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func getPubKey() -> String {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_chat_fn_method_chatmanager_get_pub_key(self.uniffiClonePointer(),$0
     )
 })
 }
@@ -833,6 +853,14 @@ open func stopServer() {try! rustCall() {
     uniffi_chat_fn_method_chatmanager_stop_server(self.uniffiClonePointer(),$0
     )
 }
+}
+    
+open func verifyHashmapRecord(record: [String: String])throws  -> DnsRecord {
+    return try  FfiConverterTypeDnsRecord.lift(try rustCallWithError(FfiConverterTypeChatError.lift) {
+    uniffi_chat_fn_method_chatmanager_verify_hashmap_record(self.uniffiClonePointer(),
+        FfiConverterDictionaryStringString.lower(record),$0
+    )
+})
 }
     
 open func verifyRecord(record: Data)throws  -> DnsRecord {
@@ -1362,6 +1390,32 @@ fileprivate struct FfiConverterSequenceTypePeer: FfiConverterRustBuffer {
     }
 }
 
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterDictionaryStringString: FfiConverterRustBuffer {
+    public static func write(_ value: [String: String], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for (key, value) in value {
+            FfiConverterString.write(key, into: &buf)
+            FfiConverterString.write(value, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [String: String] {
+        let len: Int32 = try readInt(&buf)
+        var dict = [String: String]()
+        dict.reserveCapacity(Int(len))
+        for _ in 0..<len {
+            let key = try FfiConverterString.read(from: &buf)
+            let value = try FfiConverterString.read(from: &buf)
+            dict[key] = value
+        }
+        return dict
+    }
+}
+
 private enum InitializationResult {
     case ok
     case contractVersionMismatch
@@ -1386,6 +1440,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_chat_checksum_method_chatmanager_get_dns_record() != 38484) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_chat_checksum_method_chatmanager_get_dns_record_map() != 19138) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_chat_checksum_method_chatmanager_get_file_path() != 9610) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -1393,6 +1450,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_chat_checksum_method_chatmanager_get_peers() != 63021) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_chat_checksum_method_chatmanager_get_pub_key() != 1079) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_chat_checksum_method_chatmanager_resolve_file() != 42094) {
@@ -1417,6 +1477,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_chat_checksum_method_chatmanager_stop_server() != 45008) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_chat_checksum_method_chatmanager_verify_hashmap_record() != 399) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_chat_checksum_method_chatmanager_verify_record() != 44798) {

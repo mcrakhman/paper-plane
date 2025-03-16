@@ -69,50 +69,57 @@ impl SyncEngine {
         events: Arc<Events>,
         runtime: Arc<tokio::runtime::Runtime>,
     ) -> Self {
-        let cloned_repos = manager.clone();
         let rq = Arc::new(RequestQueue::new(10, runtime.clone()));
-        let cloned_rq = rq.clone();
-        let pool = peer_pool.clone();
-        let events_clone = events.clone();
-        let file_storage_clone = file_storage.clone();
-        let peer_db_clone = peer_db.clone();
-        let async_task: Arc<AsyncFn> = Arc::new(move || {
-            let repo_clone = cloned_repos.clone();
-            let rq = cloned_rq.clone();
-            let pool_clone = pool.clone();
-            let file_storage = file_storage_clone.clone();
-            let events = events_clone.clone();
-            let peer_db = peer_db_clone.clone();
-            Box::pin(async move {
-                debug!("getting repo states");
-                let file_ids = file_storage.get_need_resolve().await;
-                if let Ok(repo_states) = repo_clone.clone().get_repo_states().await {
-                    info!("got repo states {:?}", &repo_states);
-                    let current_peers = pool_clone.all_peers().await;
-                    info!("current peers are {:?}", &current_peers);
-                    for peer in current_peers {
-                        let task = CompareStateTask {
-                            peer_id: peer.clone(),
-                            repo_states: repo_states.clone(),
-                            peer_db: peer_db.clone(),
-                            pool: pool_clone.clone(),
-                            rq: rq.clone(),
-                            manager: repo_clone.clone(),
-                        };
-                        rq.enqueue(Arc::new(task)).await?;
-                        let task = FileWantTask {
-                            peer_id: peer.clone(),
-                            file_ids: file_ids.clone(),
-                            pool: pool_clone.clone(),
-                            file_storage: file_storage.clone(),
-                        };
-                        rq.enqueue(Arc::new(task)).await?;
+
+        let async_task: Arc<AsyncFn> = Arc::new({
+            let manager = manager.clone();
+            let rq = rq.clone();
+            let peer_pool = peer_pool.clone();
+            let file_storage = file_storage.clone();
+            let peer_db = peer_db.clone();
+
+            move || {
+                let manager = manager.clone();
+                let rq = rq.clone();
+                let peer_pool = peer_pool.clone();
+                let file_storage = file_storage.clone();
+                let peer_db = peer_db.clone();
+                Box::pin(async move {
+                    let file_ids = file_storage.get_need_resolve().await;
+                    if let Ok(repo_states) = manager.clone().get_repo_states().await {
+                        info!("got repo states {:?}", &repo_states);
+                        let current_peers = peer_pool.all_peers().await;
+                        info!("current peers are {:?}", &current_peers);
+
+                        for peer in current_peers {
+                            let peer_id = peer.clone();
+
+                            let task = CompareStateTask {
+                                peer_id: peer_id.clone(),
+                                repo_states: repo_states.clone(),
+                                peer_db: peer_db.clone(),
+                                pool: peer_pool.clone(),
+                                rq: rq.clone(),
+                                manager: manager.clone(),
+                            };
+                            rq.enqueue(Arc::new(task)).await?;
+
+                            let task = FileWantTask {
+                                peer_id,
+                                file_ids: file_ids.clone(),
+                                pool: peer_pool.clone(),
+                                file_storage: file_storage.clone(),
+                            };
+                            rq.enqueue(Arc::new(task)).await?;
+                        }
                     }
-                }
-                Ok(())
-            })
+                    Ok(())
+                })
+            }
         });
+
         let task_scheduler = PeriodicTaskScheduler::new(async_task, 10, runtime.clone());
+
         SyncEngine {
             id,
             root_path,
@@ -209,10 +216,6 @@ impl SyncEngine {
                 let guard = repo.lock().await;
                 let my_counter = guard.get_counter();
                 let their_counter = msg.my_counter as u64;
-                println!(
-                    "counters: {}, {}, {}",
-                    my_counter, msg.my_counter, msg.peer_id
-                );
                 let resp: ChatMessage;
                 if their_counter >= my_counter {
                     resp = ChatMessage {
@@ -310,6 +313,9 @@ impl FileProvider for SyncEngine {
 #[async_trait]
 impl MessageBroadcaster for SyncEngine {
     async fn message_broadcast(self: Arc<Self>, sync_message: SyncMessage) -> anyhow::Result<()> {
+        if self.id != sync_message.stored_messages[0].peer_id {
+            return Ok(());
+        }
         let current_peers = self.peer_pool.current_peers().await;
         if sync_message.stored_messages.is_empty() {
             panic!("empty messages");
@@ -654,7 +660,7 @@ impl Task for CompareStateTask {
             if resp.is_none() {
                 return Err(anyhow::anyhow!("unexpected response"));
             }
-            match resp.unwrap() {
+            return match resp.unwrap() {
                 chat_message::Variant::CompareResponse(resp) => {
                     info!(
                         "received response, {:?}, peer {}",
@@ -692,9 +698,9 @@ impl Task for CompareStateTask {
                         };
                         self_clone.rq.enqueue(Arc::new(task)).await?;
                     }
-                    return Ok(());
+                    Ok(())
                 }
-                _ => return Err(anyhow::anyhow!("unexpected response")),
+                _ => Err(anyhow::anyhow!("unexpected response")),
             }
         })
     }
@@ -738,7 +744,7 @@ impl Task for FileWantTask {
             if resp.is_none() {
                 return Err(anyhow::anyhow!("unexpected response"));
             }
-            match resp.unwrap() {
+            return match resp.unwrap() {
                 chat_message::Variant::FileWantResponse(resp) => {
                     info!(
                         "received response, {:?}, peer {}",
@@ -747,9 +753,9 @@ impl Task for FileWantTask {
                     self.file_storage
                         .add_peer_have_many(resp.file_id, &peer_id)
                         .await;
-                    return Ok(());
+                    Ok(())
                 }
-                _ => return Err(anyhow::anyhow!("unexpected response")),
+                _ => Err(anyhow::anyhow!("unexpected response")),
             }
         })
     }

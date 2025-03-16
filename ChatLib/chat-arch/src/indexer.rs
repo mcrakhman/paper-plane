@@ -1,7 +1,11 @@
 use std::sync::Arc;
 
 use crate::{
-    events::Events, file_database::FileDatabase, index_database::IndexedMessageDatabase, models::{DbMessage, IndexedMessage}, proto::chat::MessagePayload
+    events::Events,
+    file_database::FileDatabase,
+    index_database::IndexedMessageDatabase,
+    models::{DbMessage, IndexedMessage},
+    proto::chat::MessagePayload,
 };
 use anyhow::Result;
 use log::info;
@@ -14,8 +18,16 @@ pub struct Indexer {
 }
 
 impl Indexer {
-    pub fn new(db: IndexedMessageDatabase, file_db: Arc<FileDatabase>, events: Arc<Events>) -> Self {
-        Self { db, file_db, events }
+    pub fn new(
+        db: IndexedMessageDatabase,
+        file_db: Arc<FileDatabase>,
+        events: Arc<Events>,
+    ) -> Self {
+        Self {
+            db,
+            file_db,
+            events,
+        }
     }
 
     async fn process_message(&self, msg: &DbMessage) -> Result<IndexedMessage> {
@@ -32,7 +44,7 @@ impl Indexer {
         };
         let indexed_message = IndexedMessage {
             id: msg.id.clone(),
-            order_id: format!("{:08}-{}", msg.order, msg.peer_id),
+            order_id: order_id(msg.order, &msg.peer_id),
             mentions: payload.mentions.clone(),
             reply: if payload.reply_id.is_empty() {
                 None
@@ -51,7 +63,7 @@ impl Indexer {
 
         Ok(indexed_message)
     }
-    
+
     pub async fn index_file_path(&self, file_id: String, file_path: String) -> Result<()> {
         info!("updating file path {}, {}", &file_id, &file_path);
         let messages = self.db.update_file_id(&file_id, &file_path).await?;
@@ -81,4 +93,14 @@ impl Indexer {
     pub async fn get_all_after_order_id(&self, order_id: &str) -> Result<Vec<IndexedMessage>> {
         self.db.get_all_after_order_id(order_id).await
     }
+}
+
+fn order_id(order: u64, peer_id: &str) -> String {
+    let bytes = order
+        .to_be_bytes()
+        .iter()
+        .map(|byte| format!("{:02x}", byte))
+        .collect::<Vec<String>>()
+        .join("");
+    format!("{}-{}", bytes, peer_id)
 }

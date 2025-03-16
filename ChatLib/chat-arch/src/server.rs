@@ -50,17 +50,20 @@ impl Server {
                     let key = self.signing_key.clone();
                     let peer_pool = self.peer_pool.clone();
                     self.runtime.spawn(async move {
-                        let res = read_handshake(&mut socket, &key).await;
-                        if let Err(e) = res {
-                            return;
-                        }
-                        let res = res.unwrap();
-                        let addr = socket.peer_addr();
-                        if addr.is_err() {
-                            warn!("Failed to get peer address");
-                            return;
-                        }
-                        let addr = addr.unwrap();
+                        let res = match read_handshake(&mut socket, &key).await {
+                            Ok(result) => result,
+                            Err(err) => {
+                                warn!("failed to read handshake: {:?}", err);
+                                return;
+                            }
+                        };
+                        let addr = match socket.peer_addr() {
+                            Ok(addr) => addr,
+                            Err(err) => {
+                                warn!("failed to get peer address: {:?}", err);
+                                return;
+                            }
+                        };
                         let socket = crate::conn::EncryptedStream::new(socket, &res.symmetric_key);
                         let session = Arc::new(Mutex::new(Session::new_server(socket, Config::default())));
                         if let Err(e) = peer_pool.insert(&res.hex_key(), addr, session).await {

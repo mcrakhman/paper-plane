@@ -23,10 +23,7 @@ impl Repository {
         sync_engine: Weak<dyn MessageBroadcaster>,
         manager: Weak<RepositoryManager>,
     ) -> anyhow::Result<Self> {
-        let res = match db.get_highest_counter(&id).await {
-            Ok(res) => res,
-            Err(_) => 0,
-        };
+        let res = db.get_highest_counter(&id).await.unwrap_or_else(|_| 0);
         let repo = Self {
             id,
             db,

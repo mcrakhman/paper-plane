@@ -40,10 +40,6 @@ impl Dialer {
 
 #[async_trait]
 impl peer_pool::Dialer for Dialer {
-    async fn add(&self, peer_id: String, addr: String) {
-        self.addrs.lock().await.insert(peer_id, addr);
-    }
-
     async fn dial(&self, peer_id: &str) -> anyhow::Result<EncryptedSession> {
         let addr = self.get(peer_id).await.ok_or(anyhow::anyhow!(
             "failed to find addr for peer_id {}",
@@ -61,6 +57,10 @@ impl peer_pool::Dialer for Dialer {
             Config::default(),
         )));
         Ok(session)
+    }
+
+    async fn add(&self, peer_id: String, addr: String) {
+        self.addrs.lock().await.insert(peer_id, addr);
     }
 
     async fn all_peers(&self) -> Vec<String> {
