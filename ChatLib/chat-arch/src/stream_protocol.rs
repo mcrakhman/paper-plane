@@ -1,9 +1,12 @@
 use anyhow::{anyhow, Result};
-use log::info;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::{
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    runtime::Handle,
+};
 
 const REQUEST_FRAME: u8 = 0x01;
 const RESPONSE_FRAME: u8 = 0x02;
+const MAX_MSG_SIZE: usize = (1 << 20) * 16;
 
 pub trait MessageEncoding: Sized {
     fn encode_message(&self) -> Vec<u8>;
@@ -32,8 +35,10 @@ where
         StreamProtocol { stream: None }
     }
 
-    fn get_stream(&mut self) -> &mut Stream {
-        self.stream.as_mut().unwrap()
+    fn get_stream(&mut self) -> Result<&mut Stream> {
+        self.stream
+            .as_mut()
+            .ok_or(anyhow!("stream not initialized"))
     }
 
     pub async fn send_request<M>(&mut self, message: &M) -> Result<()>
@@ -41,7 +46,7 @@ where
         M: MessageEncoding,
     {
         let payload = message.encode_message();
-        let stream = self.get_stream();
+        let stream = self.get_stream()?;
         stream.write_all(&[REQUEST_FRAME]).await?;
 
         let length = payload.len() as u32;
@@ -56,7 +61,7 @@ where
         M: MessageEncoding,
     {
         let mut type_buf = [0u8; 1];
-        let stream = self.get_stream();
+        let stream = self.get_stream()?;
         stream.read_exact(&mut type_buf).await?;
         if type_buf[0] != REQUEST_FRAME {
             return Err(anyhow!(
@@ -68,6 +73,9 @@ where
         let mut len_buf = [0u8; 4];
         stream.read_exact(&mut len_buf).await?;
         let length = u32::from_be_bytes(len_buf);
+        if length as usize > MAX_MSG_SIZE {
+            return Err(anyhow!("message size too large"));
+        }
 
         let mut payload = vec![0u8; length as usize];
         stream.read_exact(&mut payload).await?;
@@ -81,7 +89,7 @@ where
         M: MessageEncoding,
     {
         let payload = message.encode_message();
-        let stream = self.get_stream();
+        let stream = self.get_stream()?;
         stream.write_all(&[RESPONSE_FRAME]).await?;
 
         let length = payload.len() as u32;
@@ -93,7 +101,7 @@ where
     }
 
     pub async fn send_eof(&mut self) -> Result<()> {
-        let stream = self.get_stream();
+        let stream = self.get_stream()?;
         stream.write_all(&[RESPONSE_FRAME]).await?;
         let eof = 0xFFFF_FFFFu32.to_be_bytes();
         stream.write_all(&eof).await?;
@@ -106,7 +114,7 @@ where
         M: MessageEncoding,
     {
         let mut type_buf = [0u8; 1];
-        let stream = self.get_stream();
+        let stream = self.get_stream()?;
         if let Err(e) = stream.read_exact(&mut type_buf).await {
             return Err(anyhow!("Failed to read response type: {}", e));
         }
@@ -124,7 +132,9 @@ where
         if length == 0xFFFF_FFFF {
             return Ok(None);
         }
-
+        if length as usize > MAX_MSG_SIZE {
+            return Err(anyhow!("message size too large"));
+        }
         let mut chunk = vec![0u8; length as usize];
         stream.read_exact(&mut chunk).await?;
 
@@ -141,6 +151,9 @@ where
         if let Some(mut stream) = self.stream.take() {
             let mut this = StreamProtocol::default();
             std::mem::swap(&mut this, self);
+            if !Handle::try_current().is_ok() {
+                return;
+            }
             tokio::spawn(async move {
                 let _ = stream.flush().await;
                 let _ = stream.shutdown().await;
