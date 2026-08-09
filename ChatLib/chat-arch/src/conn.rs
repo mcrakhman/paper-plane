@@ -20,12 +20,12 @@ enum ReadState {
 
 enum WriteState {
     Idle,
-    WritingFrame {
-        buffer: BytesMut,
-        offset: usize,
-        data_len: usize,
-    },
+    WritingFrame { buffer: BytesMut, offset: usize },
 }
+
+const FRAME_SIZE: usize = 8192;
+const GCM_TAG_SIZE: usize = 16;
+const MAX_FRAME_LEN: usize = NONCE_SIZE + FRAME_SIZE + GCM_TAG_SIZE;
 
 pub struct EncryptedStream<S> {
     inner: S,
@@ -43,7 +43,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> EncryptedStream<S> {
         Self {
             inner,
             cipher: Aes256Gcm::new(Key::<aes_gcm::aes::Aes256>::from_slice(sym_key)),
-            read_buffer: BytesMut::with_capacity(1024),
+            read_buffer: BytesMut::with_capacity(MAX_FRAME_LEN + 2),
             decrypted_buffer: BytesMut::new(),
             read_state: ReadState::ReadingLength,
             write_state: WriteState::Idle,
@@ -59,20 +59,22 @@ fn read_more<S>(
 where
     S: AsyncRead + Unpin,
 {
-    let mut local_buf = [0u8; 8192];
-    let mut read_buf = ReadBuf::new(&mut local_buf);
+    let n = {
+        let spare = read_buffer.spare_capacity_mut();
+        let mut buf = ReadBuf::uninit(spare);
 
-    match Pin::new(inner).poll_read(cx, &mut read_buf) {
-        Poll::Pending => Poll::Pending,
-        Poll::Ready(Ok(())) => {
-            let n = read_buf.filled().len();
-            if n > 0 {
-                read_buffer.extend_from_slice(read_buf.filled());
-            }
-            Poll::Ready(Ok(n))
+        match Pin::new(inner).poll_read(cx, &mut buf) {
+            Poll::Pending => return Poll::Pending,
+            Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+            Poll::Ready(Ok(())) => buf.filled().len(),
         }
-        Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
+    };
+
+    unsafe {
+        read_buffer.set_len(read_buffer.len() + n);
     }
+
+    Poll::Ready(Ok(n))
 }
 
 impl<S: AsyncRead + AsyncWrite + Unpin> AsyncRead for EncryptedStream<S> {
@@ -81,6 +83,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AsyncRead for EncryptedStream<S> {
         cx: &mut Context<'_>,
         buf: &mut io::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
+        if buf.remaining() == 0 {
+            return Poll::Ready(Ok(()));
+        }
         loop {
             if !self.decrypted_buffer.is_empty() {
                 let to_read = std::cmp::min(self.decrypted_buffer.len(), buf.remaining());
@@ -93,7 +98,13 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AsyncRead for EncryptedStream<S> {
                 ReadState::ReadingLength => {
                     if this.read_buffer.len() < 2 {
                         let n = ready!(read_more(&mut this.inner, &mut this.read_buffer, cx))?;
-                        if n == 0 && this.read_buffer.is_empty() {
+                        if n == 0 {
+                            if !this.read_buffer.is_empty() {
+                                return Poll::Ready(Err(io::Error::new(
+                                    io::ErrorKind::UnexpectedEof,
+                                    "EOF before complete frame length",
+                                )));
+                            }
                             return Poll::Ready(Ok(()));
                         }
                         continue;
@@ -104,6 +115,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AsyncRead for EncryptedStream<S> {
                         return Poll::Ready(Err(io::Error::new(
                             io::ErrorKind::InvalidData,
                             "Frame length smaller than nonce size",
+                        )));
+                    } else if frame_len > MAX_FRAME_LEN {
+                        return Poll::Ready(Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "Frame length larger than max frame len size",
                         )));
                     }
                     this.read_state = ReadState::ReadingFrame { frame_len };
@@ -143,49 +159,66 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AsyncWrite for EncryptedStream<S> {
         data: &[u8],
     ) -> Poll<io::Result<usize>> {
         let this = self.as_mut().get_mut();
-        let cipher = &this.cipher;
-        let write_state = &mut this.write_state;
-        let inner = &mut this.inner;
 
         loop {
-            match write_state {
+            match &mut this.write_state {
+                WriteState::WritingFrame { buffer, offset } => {
+                    while *offset < buffer.len() {
+                        let n = match Pin::new(&mut this.inner).poll_write(cx, &buffer[*offset..]) {
+                            Poll::Pending => {
+                                return Poll::Pending;
+                            }
+
+                            Poll::Ready(Err(err)) => {
+                                return Poll::Ready(Err(err));
+                            }
+
+                            Poll::Ready(Ok(0)) => {
+                                return Poll::Ready(Err(io::Error::new(
+                                    io::ErrorKind::WriteZero,
+                                    "failed to write encrypted frame",
+                                )));
+                            }
+
+                            Poll::Ready(Ok(n)) => n,
+                        };
+
+                        *offset += n;
+                    }
+                    this.write_state = WriteState::Idle;
+                }
+
                 WriteState::Idle => {
+                    if data.is_empty() {
+                        return Poll::Ready(Ok(0));
+                    }
+
+                    let accepted = data.len().min(FRAME_SIZE);
+                    let plaintext = &data[..accepted];
+
                     let mut nonce_bytes = [0u8; NONCE_SIZE];
                     getrandom::getrandom(&mut nonce_bytes)?;
+
                     let nonce = Nonce::from_slice(&nonce_bytes);
 
-                    let ciphertext = cipher
-                        .encrypt(nonce, data)
-                        .map_err(|_| io::Error::new(io::ErrorKind::Other, "Encryption failed"))?;
+                    let ciphertext = this
+                        .cipher
+                        .encrypt(nonce, plaintext)
+                        .map_err(|_| io::Error::new(io::ErrorKind::Other, "encryption failed"))?;
 
-                    let frame_len = (NONCE_SIZE + ciphertext.len()) as u16;
+                    let frame_len = u16::try_from(NONCE_SIZE + ciphertext.len()).map_err(|_| {
+                        io::Error::new(io::ErrorKind::InvalidData, "encrypted frame too large")
+                    })?;
+
                     let mut buffer = BytesMut::with_capacity(2 + NONCE_SIZE + ciphertext.len());
+
                     buffer.extend_from_slice(&frame_len.to_be_bytes());
                     buffer.extend_from_slice(&nonce_bytes);
                     buffer.extend_from_slice(&ciphertext);
 
-                    *write_state = WriteState::WritingFrame {
-                        buffer,
-                        offset: 0,
-                        data_len: data.len(),
-                    };
-                }
-                WriteState::WritingFrame {
-                    buffer,
-                    offset,
-                    data_len,
-                } => {
-                    let pinned_inner = Pin::new(inner);
-                    let n = ready!(pinned_inner.poll_write(cx, &buffer[*offset..]))?;
-                    *offset += n;
+                    this.write_state = WriteState::WritingFrame { buffer, offset: 0 };
 
-                    if *offset >= buffer.len() {
-                        let data_len = *data_len;
-                        *write_state = WriteState::Idle;
-                        return Poll::Ready(Ok(data_len));
-                    } else {
-                        return Poll::Pending;
-                    }
+                    return Poll::Ready(Ok(accepted));
                 }
             }
         }
@@ -193,25 +226,36 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AsyncWrite for EncryptedStream<S> {
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let this = self.as_mut().get_mut();
-        let write_state = &mut this.write_state; // Mutable borrow of the write_state
-        let inner = &mut this.inner;
 
-        match write_state {
-            WriteState::Idle => Pin::new(inner).poll_flush(cx),
-            WriteState::WritingFrame {
-                buffer,
-                offset,
-                data_len,
-            } => {
-                if *offset < buffer.len() {
-                    let n = ready!(Pin::new(inner).poll_write(cx, &buffer[*offset..]))?;
-                    *offset += n;
+        loop {
+            match &mut this.write_state {
+                WriteState::Idle => {
+                    return Pin::new(&mut this.inner).poll_flush(cx);
                 }
-                if *offset >= buffer.len() {
-                    self.write_state = WriteState::Idle;
-                    Pin::new(&mut self.inner).poll_flush(cx)
-                } else {
-                    Poll::Pending
+
+                WriteState::WritingFrame { buffer, offset } => {
+                    while *offset < buffer.len() {
+                        let n = match Pin::new(&mut this.inner).poll_write(cx, &buffer[*offset..]) {
+                            Poll::Pending => return Poll::Pending,
+
+                            Poll::Ready(Err(err)) => {
+                                return Poll::Ready(Err(err));
+                            }
+
+                            Poll::Ready(Ok(0)) => {
+                                return Poll::Ready(Err(io::Error::new(
+                                    io::ErrorKind::WriteZero,
+                                    "failed to write encrypted frame",
+                                )));
+                            }
+
+                            Poll::Ready(Ok(n)) => n,
+                        };
+
+                        *offset += n;
+                    }
+
+                    this.write_state = WriteState::Idle;
                 }
             }
         }
