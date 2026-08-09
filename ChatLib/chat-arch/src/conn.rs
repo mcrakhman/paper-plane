@@ -36,17 +36,20 @@ pub struct EncryptedStream<S> {
     read_state: ReadState,
 
     write_state: WriteState,
+    read_buffer_size: usize,
 }
 
 impl<S: AsyncRead + AsyncWrite + Unpin> EncryptedStream<S> {
     pub fn new(inner: S, sym_key: &SymKey) -> Self {
+        let read_buffer_size = MAX_FRAME_LEN + 2;
         Self {
             inner,
             cipher: Aes256Gcm::new(Key::<aes_gcm::aes::Aes256>::from_slice(sym_key)),
-            read_buffer: BytesMut::with_capacity(MAX_FRAME_LEN + 2),
+            read_buffer: BytesMut::with_capacity(read_buffer_size),
             decrypted_buffer: BytesMut::new(),
             read_state: ReadState::ReadingLength,
             write_state: WriteState::Idle,
+            read_buffer_size,
         }
     }
 }
@@ -97,6 +100,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AsyncRead for EncryptedStream<S> {
             match &mut this.read_state {
                 ReadState::ReadingLength => {
                     if this.read_buffer.len() < 2 {
+                        let data = this.read_buffer.split();
+                        this.read_buffer.reserve(this.read_buffer_size);
+                        this.read_buffer.extend_from_slice(&data);
                         let n = ready!(read_more(&mut this.inner, &mut this.read_buffer, cx))?;
                         if n == 0 {
                             if !this.read_buffer.is_empty() {
@@ -127,6 +133,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AsyncRead for EncryptedStream<S> {
 
                 ReadState::ReadingFrame { frame_len } => {
                     if this.read_buffer.len() < *frame_len {
+                        let data = this.read_buffer.split();
+                        this.read_buffer.reserve(this.read_buffer_size);
+                        this.read_buffer.extend_from_slice(&data);
                         let n = ready!(read_more(&mut this.inner, &mut this.read_buffer, cx))?;
                         if n == 0 && this.read_buffer.len() < *frame_len {
                             return Poll::Ready(Err(io::Error::new(
